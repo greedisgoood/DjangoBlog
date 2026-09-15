@@ -11,6 +11,9 @@ https://docs.djangoproject.com/en/1.10/ref/settings/
 """
 import os
 import sys
+from pathlib import Path
+
+from django.utils.translation import gettext_lazy as _
 
 
 def env_to_bool(env, default):
@@ -18,9 +21,8 @@ def env_to_bool(env, default):
     return default if str_val is None else str_val == 'True'
 
 
-# Build paths inside the project like this: os.path.join(BASE_DIR, ...)
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/1.10/howto/deployment/checklist/
@@ -35,6 +37,8 @@ TESTING = len(sys.argv) > 1 and sys.argv[1] == 'test'
 
 # ALLOWED_HOSTS = []
 ALLOWED_HOSTS = ['*', '127.0.0.1', 'example.com']
+# django 4.0新增配置
+CSRF_TRUSTED_ORIGINS = ['http://example.com']
 # Application definition
 
 
@@ -55,13 +59,15 @@ INSTALLED_APPS = [
     'comments',
     'oauth',
     'servermanager',
-    'owntracks',
-    'compressor'
+    'compressor',
+    'djangoblog'
 ]
 
 MIDDLEWARE = [
+
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.locale.LocaleMiddleware',
     'django.middleware.gzip.GZipMiddleware',
     # 'django.middleware.cache.UpdateCacheMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -104,7 +110,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': os.environ.get('DJANGO_MYSQL_DATABASE') or 'djangoblog',
         'USER': os.environ.get('DJANGO_MYSQL_USER') or 'root',
-        'PASSWORD': os.environ.get('DJANGO_MYSQL_PASSWORD') or 'djangoblog_123',
+        'PASSWORD': os.environ.get('DJANGO_MYSQL_PASSWORD') or 'root',
         'HOST': os.environ.get('DJANGO_MYSQL_HOST') or '127.0.0.1',
         'PORT': int(
             os.environ.get('DJANGO_MYSQL_PORT') or 3306),
@@ -130,8 +136,14 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-# Internationalization
-# https://docs.djangoproject.com/en/1.10/topics/i18n/
+LANGUAGES = (
+    ('en', _('English')),
+    ('zh-hans', _('Simplified Chinese')),
+    ('zh-hant', _('Traditional Chinese')),
+)
+LOCALE_PATHS = (
+    os.path.join(BASE_DIR, 'locale'),
+)
 
 LANGUAGE_CODE = 'zh-hans'
 
@@ -141,18 +153,102 @@ USE_I18N = True
 
 USE_L10N = True
 
-USE_TZ = True
+USE_TZ = False
+
+# Session settings
+SESSION_COOKIE_AGE = 1209600  # 2周（Django默认值）
+REMEMBER_ME_LOGIN_TTL = 2626560  # 30天（勾选"记住我"时使用）
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/1.10/howto/static-files/
 
 
-HAYSTACK_CONNECTIONS = {
-    'default': {
-        'ENGINE': 'djangoblog.whoosh_cn_backend.WhooshEngine',
-        'PATH': os.path.join(os.path.dirname(__file__), 'whoosh_index'),
-    },
-}
+# ==================== 搜索引擎配置 ====================
+# 支持 Whoosh 和 Elasticsearch 两种搜索引擎
+# 优先级：环境变量 > 手动配置 > 默认 Whoosh
+
+# === Elasticsearch 配置 ===
+# 1. 生产环境：通过环境变量配置（见下方）
+# 2. 开发环境：手动配置（取消下面注释）
+
+# ELASTICSEARCH_DSL = {
+#     'default': {
+#         'hosts': 'http://127.0.0.1:9200',
+#         'verify_certs': False,  # 是否验证SSL证书
+#
+#         # === 认证方式（根据实际情况选择一种） ===
+#
+#         # 方式1: 无认证（安全功能已禁用的开发环境）
+#         # 不需要额外配置
+#
+#         # 方式2: 用户名密码认证（ES 8.x 默认方式，推荐）
+#         # 'username': 'elastic',
+#         # 'password': 'your_password',
+#
+#         # 方式3: API Key 认证
+#         # 'api_key': 'your_api_key_here',
+#
+#         # 方式4: 证书认证
+#         # 'ca_certs': '/path/to/ca.crt',
+#         # 'client_cert': '/path/to/client.crt',
+#         # 'client_key': '/path/to/client.key',
+#     },
+# }
+
+# === 环境变量配置 (生产环境，优先级最高) ===
+# 如果设置了 DJANGO_ELASTICSEARCH_HOST 环境变量，将覆盖上面的手动配置
+# 支持的环境变量：
+#   - DJANGO_ELASTICSEARCH_HOST: ES主机地址（必需）
+#   - ELASTICSEARCH_VERIFY_CERTS: 是否验证证书 (True/False)
+#   - ELASTICSEARCH_USERNAME: 用户名
+#   - ELASTICSEARCH_PASSWORD: 密码
+#   - ELASTICSEARCH_API_KEY: API Key
+#   - ELASTICSEARCH_CA_CERTS: CA证书路径
+#   - ELASTICSEARCH_CLIENT_CERT: 客户端证书路径
+#   - ELASTICSEARCH_CLIENT_KEY: 客户端私钥路径
+
+if os.environ.get('DJANGO_ELASTICSEARCH_HOST'):
+    # 通过环境变量配置 Elasticsearch（生产环境）
+    _es_config = {
+        'hosts': os.environ.get('DJANGO_ELASTICSEARCH_HOST'),
+        'verify_certs': os.environ.get('ELASTICSEARCH_VERIFY_CERTS', 'False').lower() == 'true',
+    }
+
+    # 用户名密码认证
+    if os.environ.get('ELASTICSEARCH_USERNAME') and os.environ.get('ELASTICSEARCH_PASSWORD'):
+        _es_config['username'] = os.environ.get('ELASTICSEARCH_USERNAME')
+        _es_config['password'] = os.environ.get('ELASTICSEARCH_PASSWORD')
+
+    # API Key 认证
+    if os.environ.get('ELASTICSEARCH_API_KEY'):
+        _es_config['api_key'] = os.environ.get('ELASTICSEARCH_API_KEY')
+
+    # 证书认证
+    if os.environ.get('ELASTICSEARCH_CA_CERTS'):
+        _es_config['ca_certs'] = os.environ.get('ELASTICSEARCH_CA_CERTS')
+    if os.environ.get('ELASTICSEARCH_CLIENT_CERT') and os.environ.get('ELASTICSEARCH_CLIENT_KEY'):
+        _es_config['client_cert'] = os.environ.get('ELASTICSEARCH_CLIENT_CERT')
+        _es_config['client_key'] = os.environ.get('ELASTICSEARCH_CLIENT_KEY')
+
+    ELASTICSEARCH_DSL = {'default': _es_config}
+
+# === Haystack 配置 ===
+if 'ELASTICSEARCH_DSL' in locals():
+    # 使用 Elasticsearch
+    HAYSTACK_CONNECTIONS = {
+        'default': {
+            'ENGINE': 'djangoblog.elasticsearch_backend.ElasticSearchEngine',
+        }
+    }
+else:
+    # 默认使用 Whoosh
+    HAYSTACK_CONNECTIONS = {
+        'default': {
+            'ENGINE': 'djangoblog.whoosh_cn_backend.WhooshEngine',
+            'PATH': os.path.join(BASE_DIR, 'whoosh_index'),
+        },
+    }
+
 # Automatically update searching index
 HAYSTACK_SIGNAL_PROCESSOR = 'haystack.signals.RealtimeSignalProcessor'
 # Allow user login with username and password
@@ -163,6 +259,14 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'collectedstatic')
 
 STATIC_URL = '/static/'
 STATICFILES = os.path.join(BASE_DIR, 'static')
+
+# 添加插件静态文件目录
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, 'plugins'),  # 让Django能找到插件的静态文件
+]
+
+# Vite开发服务器URL（开发模式）
+VITE_DEV_SERVER_URL = 'http://localhost:5173'
 
 AUTH_USER_MODEL = 'accounts.BlogUser'
 LOGIN_URL = '/login/'
@@ -187,6 +291,14 @@ CACHES = {
         'LOCATION': 'unique-snowflake',
     }
 }
+# 使用redis作为缓存
+if os.environ.get("DJANGO_REDIS_URL"):
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': f'redis://{os.environ.get("DJANGO_REDIS_URL")}',
+        }
+    }
 
 SITE_ID = 1
 BAIDU_NOTIFY_URL = os.environ.get('DJANGO_BAIDU_NOTIFY_URL') \
@@ -207,6 +319,10 @@ ADMINS = [('admin', os.environ.get('DJANGO_ADMIN_EMAIL') or 'admin@admin.com')]
 # WX ADMIN password(Two times md5)
 WXADMIN = os.environ.get(
     'DJANGO_WXADMIN_PASSWORD') or '995F03AC401D6CABABAEF756FC4D43C7'
+
+LOG_PATH = os.path.join(BASE_DIR, 'logs')
+if not os.path.exists(LOG_PATH):
+    os.makedirs(LOG_PATH, exist_ok=True)
 
 LOGGING = {
     'version': 1,
@@ -231,10 +347,14 @@ LOGGING = {
     'handlers': {
         'log_file': {
             'level': 'INFO',
-            'class': 'logging.handlers.RotatingFileHandler',
-            'filename': 'djangoblog.log',
-            'maxBytes': 16777216,  # 16 MB
-            'formatter': 'verbose'
+            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'filename': os.path.join(LOG_PATH, 'djangoblog.log'),
+            'when': 'D',
+            'formatter': 'verbose',
+            'interval': 1,
+            'delay': True,
+            'backupCount': 5,
+            'encoding': 'utf-8'
         },
         'console': {
             'level': 'DEBUG',
@@ -256,11 +376,6 @@ LOGGING = {
             'handlers': ['log_file', 'console'],
             'level': 'INFO',
             'propagate': True,
-        },
-        'django.request': {
-            'handlers': ['mail_admins'],
-            'level': 'ERROR',
-            'propagate': False,
         }
     }
 }
@@ -271,34 +386,77 @@ STATICFILES_FINDERS = (
     # other
     'compressor.finders.CompressorFinder',
 )
-COMPRESS_ENABLED = True
-# COMPRESS_OFFLINE = True
+# 开发模式下禁用压缩，使用Vite处理静态资源
+COMPRESS_ENABLED = not DEBUG
+# 根据环境变量决定是否启用离线压缩
+COMPRESS_OFFLINE = os.environ.get('COMPRESS_OFFLINE', 'False').lower() == 'true'
 
+# 压缩输出目录
+COMPRESS_OUTPUT_DIR = 'compressed'
 
+# 压缩文件名模板 - 包含哈希值用于缓存破坏
+COMPRESS_CSS_HASHING_METHOD = 'mtime'
+COMPRESS_JS_HASHING_METHOD = 'mtime'
+
+# 高级CSS压缩过滤器
 COMPRESS_CSS_FILTERS = [
-    # creates absolute urls from relative ones
+    # 创建绝对URL
     'compressor.filters.css_default.CssAbsoluteFilter',
-    # css minimizer
-    'compressor.filters.cssmin.CSSMinFilter'
+    # CSS压缩器 - 高压缩等级
+    'compressor.filters.cssmin.CSSCompressorFilter',
 ]
+
+# 高级JS压缩过滤器
 COMPRESS_JS_FILTERS = [
-    'compressor.filters.jsmin.JSMinFilter'
+    # JS压缩器 - 高压缩等级
+    'compressor.filters.jsmin.SlimItFilter',
 ]
+
+# 压缩缓存配置
+COMPRESS_CACHE_BACKEND = 'default'
+COMPRESS_CACHE_KEY_FUNCTION = 'compressor.cache.simple_cachekey'
+
+# 预压缩配置
+COMPRESS_PRECOMPILERS = (
+    # 支持SCSS/SASS
+    ('text/x-scss', 'django_libsass.SassCompiler'),
+    ('text/x-sass', 'django_libsass.SassCompiler'),
+)
+
+# 压缩性能优化
+COMPRESS_MINT_DELAY = 30  # 压缩延迟（秒）
+COMPRESS_MTIME_DELAY = 10  # 修改时间检查延迟
+COMPRESS_REBUILD_TIMEOUT = 2592000  # 重建超时（30天）
+
+# 压缩等级配置
+COMPRESS_CSS_COMPRESSOR = 'compressor.css.CssCompressor'
+COMPRESS_JS_COMPRESSOR = 'compressor.js.JsCompressor'
+
+# 静态文件缓存配置
+STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.ManifestStaticFilesStorage'
+
+# 浏览器缓存配置（通过中间件或服务器配置）
+COMPRESS_URL = STATIC_URL
+COMPRESS_ROOT = STATIC_ROOT
 
 MEDIA_ROOT = os.path.join(BASE_DIR, 'uploads')
 MEDIA_URL = '/media/'
 X_FRAME_OPTIONS = 'SAMEORIGIN'
 
+
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-if os.environ.get('DJANGO_ELASTICSEARCH_HOST'):
-    ELASTICSEARCH_DSL = {
-        'default': {
-            'hosts': os.environ.get('DJANGO_ELASTICSEARCH_HOST')
-        },
-    }
-    HAYSTACK_CONNECTIONS = {
-        'default': {
-            'ENGINE': 'djangoblog.elasticsearch_backend.ElasticSearchEngine',
-        },
-    }
+# Plugin System
+PLUGINS_DIR = BASE_DIR / 'plugins'
+ACTIVE_PLUGINS = [
+    'article_copyright',
+    'reading_time',
+    'external_links',
+    'view_count',
+    'seo_optimizer',
+    'image_lazy_loading',
+    'article_recommendation',
+    'cloudflare_cache',  # Cloudflare缓存管理插件
+]
+

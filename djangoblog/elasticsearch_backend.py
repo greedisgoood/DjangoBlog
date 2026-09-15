@@ -1,6 +1,7 @@
-from django.utils.encoding import force_text
+from django.utils.encoding import force_str
 from elasticsearch_dsl import Q
 from haystack.backends import BaseEngine, BaseSearchBackend, BaseSearchQuery, log_query
+from haystack.forms import ModelSearchForm
 from haystack.models import SearchResult
 from haystack.utils import log as logging
 
@@ -18,6 +19,7 @@ class ElasticSearchBackend(BaseSearchBackend):
             connection_alias,
             **connection_options)
         self.manager = ArticleDocumentManager()
+        self.include_spelling = True
 
     def _get_models(self, iterable):
         models = iterable if iterable and iterable[0] else Article.objects.all()
@@ -51,29 +53,77 @@ class ElasticSearchBackend(BaseSearchBackend):
     def clear(self, models=None, commit=True):
         self.remove(None)
 
+    @staticmethod
+    def get_suggestion(query: str) -> str:
+        """获取推荐词, 如果没有找到添加原搜索词"""
+
+        search = ArticleDocument.search() \
+            .query("match", body=query) \
+            .suggest('suggest_search', query, term={'field': 'body'}) \
+            .execute()
+
+        keywords = []
+        for suggest in search.suggest.suggest_search:
+            if suggest["options"]:
+                keywords.append(suggest["options"][0]["text"])
+            else:
+                keywords.append(suggest["text"])
+
+        return ' '.join(keywords)
+
     @log_query
     def search(self, query_string, **kwargs):
         logger.info('search query_string:' + query_string)
 
         start_offset = kwargs.get('start_offset')
         end_offset = kwargs.get('end_offset')
+        highlight = kwargs.get('highlight', True)  # 默认启用高亮
 
-        q = Q('bool', should=[Q('match', body=query_string), Q(
-            'match', title=query_string)], minimum_should_match="70%")
+        # 推荐词搜索
+        if getattr(self, "is_suggest", None):
+            suggestion = self.get_suggestion(query_string)
+        else:
+            suggestion = query_string
+
+        q = Q('bool',
+              should=[Q('match', body=suggestion), Q('match', title=suggestion)],
+              minimum_should_match=1)  # 至少匹配1个should子句
 
         search = ArticleDocument.search() \
                      .query('bool', filter=[q]) \
                      .filter('term', status='p') \
-                     .filter('term', type='a') \
-                     .source(False)[start_offset: end_offset]
+                     .filter('term', type='a')
+
+        # 添加高亮配置
+        if highlight:
+            search = search.highlight('title', 'body',
+                                    fragment_size=150,  # 片段大小
+                                    number_of_fragments=3,  # 片段数量
+                                    pre_tags=['<mark>'],  # 高亮开始标签
+                                    post_tags=['</mark>'])  # 高亮结束标签
+
+        search = search.source(False)[start_offset: end_offset]
 
         results = search.execute()
-        hits = results['hits'].total
+        # ES 8.x: total 现在是对象 {'value': 123, 'relation': 'eq'}
+        hits_total = results['hits']['total']
+        hits = hits_total['value'] if isinstance(hits_total, dict) else hits_total
         raw_results = []
         for raw_result in results['hits']['hits']:
             app_label = 'blog'
             model_name = 'Article'
             additional_fields = {}
+
+            # 添加高亮内容
+            if highlight and 'highlight' in raw_result:
+                highlighted = {}
+                if 'title' in raw_result['highlight']:
+                    highlighted['title'] = raw_result['highlight']['title']
+                if 'body' in raw_result['highlight']:
+                    highlighted['body'] = raw_result['highlight']['body']
+
+                if highlighted:
+                    additional_fields['highlighted'] = highlighted
 
             result_class = SearchResult
 
@@ -85,7 +135,7 @@ class ElasticSearchBackend(BaseSearchBackend):
                 **additional_fields)
             raw_results.append(result)
         facets = {}
-        spelling_suggestion = None
+        spelling_suggestion = None if query_string == suggestion else suggestion
 
         return {
             'results': raw_results,
@@ -98,9 +148,9 @@ class ElasticSearchBackend(BaseSearchBackend):
 class ElasticSearchQuery(BaseSearchQuery):
     def _convert_datetime(self, date):
         if hasattr(date, 'hour'):
-            return force_text(date.strftime('%Y%m%d%H%M%S'))
+            return force_str(date.strftime('%Y%m%d%H%M%S'))
         else:
-            return force_text(date.strftime('%Y%m%d000000'))
+            return force_str(date.strftime('%Y%m%d000000'))
 
     def clean(self, query_fragment):
         """
@@ -133,6 +183,22 @@ class ElasticSearchQuery(BaseSearchQuery):
     def get_count(self):
         results = self.get_results()
         return len(results) if results else 0
+
+    def get_spelling_suggestion(self, preferred_query=None):
+        return self._spelling_suggestion
+
+    def build_params(self, spelling_query=None):
+        kwargs = super(ElasticSearchQuery, self).build_params(spelling_query=spelling_query)
+        return kwargs
+
+
+class ElasticSearchModelSearchForm(ModelSearchForm):
+
+    def search(self):
+        # 是否建议搜索
+        self.searchqueryset.query.backend.is_suggest = self.data.get("is_suggest") != "no"
+        sqs = super().search()
+        return sqs
 
 
 class ElasticSearchEngine(BaseEngine):

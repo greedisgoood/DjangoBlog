@@ -1,22 +1,27 @@
-# Introduction to main features settings
+# Introduction to Main Features Settings
 
-## Cache:
-Cache using `memcache` for default. If you don't have `memcache` environment, you can remove the `default` setting in `CACHES` and change `locmemcache` to `default`.
+## Cache Configuration
+
+The cache uses `localmem` (local memory cache) by default. If you have a Redis environment, you can automatically switch to Redis cache by setting the `DJANGO_REDIS_URL` environment variable.
+
+### Using Redis Cache
+
+Set the environment variable:
+```bash
+export DJANGO_REDIS_URL="127.0.0.1:6379/0"
+```
+
+Or directly modify the cache configuration in `settings.py`:
 ```python
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.memcached.MemcachedCache',
-        'LOCATION': '127.0.0.1:11211',
-        'KEY_PREFIX': 'django_test' if TESTING else 'djangoblog',
-        'TIMEOUT': 60 * 60 * 10
-    },
-    'locmemcache': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'TIMEOUT': 10800,
-        'LOCATION': 'unique-snowflake',
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': 'redis://127.0.0.1:6379/0',
     }
 }
 ```
+
+Reference code: https://github.com/liangliangyy/DjangoBlog/blob/master/djangoblog/settings.py#L201-L215
 
 ## OAuth Login:
 QQ, Weibo, Google, GitHub and Facebook are now supported for OAuth login. Fetch OAuth login permissions from the corresponding open platform, and save them with `appkey`, `appsecret` and callback address in **Backend->OAuth** configuration.
@@ -25,9 +30,6 @@ QQ, Weibo, Google, GitHub and Facebook are now supported for OAuth login. Fetch 
 QQ: http://your-domain-name/oauth/authorize?type=qq
 Weibo: http://your-domain-name/oauth/authorize?type=weibo
 type is in the type field of `oauthmanager`.
-
-## owntracks:
-owntracks is a location tracking application. It will send your locaiton to the server by timing.Simple support owntracks features. Just install owntracks app and set api address as `your-domain-name/owntracks/logtracks`. Visit `your-domain-name/owntracks/show_dates` and you will see the date with latitude and langitude, click it and see the motion track. The map is drawn by AMap.
 
 ## Email feature:
 Same as before, Configure your own error msg recvie email information with`ADMINS = [('liangliang', 'liangliangyy@gmail.com')]` in `settings.py`. And modify:
@@ -55,10 +57,93 @@ If the code block in your article didn't show hightlight, please write the code 
 
 That is, you should add the corresponding language name before the code block.
 
-## Update
-If you get errors as following while executing database migrations:
+## Update & Version Notes
+
+### Database Migration Errors
+If you encounter errors while executing database migrations:
 ```python
 django.db.migrations.exceptions.MigrationSchemaMissing: Unable to create the django_migrations table ((1064, "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '(6) NOT NULL)' at line 1"))
 ```
-This problem may cause by the mysql version under 5.6, a new version( >= 5.6 ) mysql is needed.
+This problem may be caused by MySQL version < 5.6. Please upgrade to MySQL >= 5.6.
+
+### Django Version Configuration
+
+#### Django 4.0+ CSRF Configuration
+
+Django 4.0 and above require `CSRF_TRUSTED_ORIGINS` configuration, otherwise you may encounter CSRF errors during login.
+
+Configure your domain in `settings.py`:
+```python
+CSRF_TRUSTED_ORIGINS = [
+    'http://example.com',
+    'https://example.com',
+    'http://www.example.com',
+    'https://www.example.com',
+]
+```
+
+**Note**: Replace `example.com` with your actual domain, including the protocol (http/https).
+
+Reference code: https://github.com/liangliangyy/DjangoBlog/blob/master/djangoblog/settings.py#L41
+
+#### Django 5.2 Notes
+
+This project currently uses Django 5.2.9, which has been thoroughly tested and runs stably. If upgrading from an older version, please note:
+- Ensure Python version >= 3.10
+- Run database migrations: `python manage.py migrate`
+- Update dependencies: `pip install -r requirements.txt`
+
+## Frontend Development Configuration
+
+### Tech Stack
+
+- **Alpine.js 3.13**: Lightweight reactive framework
+- **Tailwind CSS 3.4**: Utility-first CSS framework
+- **HTMX 2.0**: HTML-over-the-wire architecture
+- **Vite 5.4**: Modern build tool
+
+### Development Mode
+
+When developing frontend code, you can use Vite's hot reload feature:
+
+```bash
+cd frontend
+npm run dev
+```
+
+This will start the Vite development server (default port 5173), and frontend code changes will be automatically rebuilt and refreshed in the browser.
+
+### Production Build
+
+```bash
+cd frontend
+npm run build
+```
+
+Build outputs will be generated to `blog/static/blog/dist/` directory, including:
+- CSS files (compiled with Tailwind JIT and compressed)
+- JavaScript files (code-split and minified)
+- Vite manifest file (for asset mapping)
+
+### Dark Mode
+
+The project has built-in dark mode support:
+
+- **Auto-switching**: Follows system theme preferences automatically
+- **Persistence**: User choice is saved to localStorage
+- **No Flash**: Seamless theme loading without white screen flash
+- **Keyboard Shortcut**: `Ctrl+Shift+D` / `Cmd+Shift+D` for quick toggling
+
+Users can manually toggle the theme using the button in the top-right corner of the page.
+
+### Color Schemes
+
+Supports 8 color themes, configurable in `djangoblog/settings.py`:
+
+```python
+# Set in template context
+COLOR_SCHEME = 'purple'  # purple, blue, green, orange, pink, red, indigo, teal
+```
+
+Color schemes are implemented through CSS variables system and do not require rebuilding frontend assets after changes.
 

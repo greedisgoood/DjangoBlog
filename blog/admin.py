@@ -3,27 +3,10 @@ from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from django.utils.html import format_html
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 # Register your models here.
-from .models import Article
-
-
-class ArticleListFilter(admin.SimpleListFilter):
-    title = _("作者")
-    parameter_name = 'author'
-
-    def lookups(self, request, model_admin):
-        authors = list(set(map(lambda x: x.author, Article.objects.all())))
-        for author in authors:
-            yield (author.id, _(author.username))
-
-    def queryset(self, request, queryset):
-        id = self.value()
-        if id:
-            return queryset.filter(author__id__exact=id)
-        else:
-            return queryset
+from .models import Article, Category, Tag, Links, SideBar, BlogSettings
 
 
 class ArticleForm(forms.ModelForm):
@@ -50,10 +33,10 @@ def open_article_commentstatus(modeladmin, request, queryset):
     queryset.update(comment_status='o')
 
 
-makr_article_publish.short_description = '发布选中文章'
-draft_article.short_description = '选中文章设置为草稿'
-close_article_commentstatus.short_description = '关闭文章评论'
-open_article_commentstatus.short_description = '打开文章评论'
+makr_article_publish.short_description = _('Publish selected articles')
+draft_article.short_description = _('Draft selected articles')
+close_article_commentstatus.short_description = _('Close article comments')
+open_article_commentstatus.short_description = _('Open article comments')
 
 
 class ArticlelAdmin(admin.ModelAdmin):
@@ -65,28 +48,30 @@ class ArticlelAdmin(admin.ModelAdmin):
         'title',
         'author',
         'link_to_category',
-        'created_time',
+        'creation_time',
         'views',
         'status',
         'type',
         'article_order')
     list_display_links = ('id', 'title')
-    list_filter = (ArticleListFilter, 'status', 'type', 'category', 'tags')
+    list_filter = ('status', 'type', 'category')
+    date_hierarchy = 'creation_time'
     filter_horizontal = ('tags',)
-    exclude = ('created_time', 'last_mod_time')
+    exclude = ('creation_time', 'last_modify_time')
     view_on_site = True
     actions = [
         makr_article_publish,
         draft_article,
         close_article_commentstatus,
         open_article_commentstatus]
+    raw_id_fields = ('author', 'category',)
 
     def link_to_category(self, obj):
         info = (obj.category._meta.app_label, obj.category._meta.model_name)
         link = reverse('admin:%s_%s_change' % info, args=(obj.category.id,))
         return format_html(u'<a href="%s">%s</a>' % (link, obj.category.name))
 
-    link_to_category.short_description = '分类目录'
+    link_to_category.short_description = _('category')
 
     def get_form(self, request, obj=None, **kwargs):
         form = super(ArticlelAdmin, self).get_form(request, obj, **kwargs)
@@ -108,22 +93,51 @@ class ArticlelAdmin(admin.ModelAdmin):
 
 
 class TagAdmin(admin.ModelAdmin):
-    exclude = ('slug', 'last_mod_time', 'created_time')
+    exclude = ('slug', 'last_mod_time', 'creation_time')
 
 
 class CategoryAdmin(admin.ModelAdmin):
     list_display = ('name', 'parent_category', 'index')
-    exclude = ('slug', 'last_mod_time', 'created_time')
+    exclude = ('slug', 'last_mod_time', 'creation_time')
 
 
 class LinksAdmin(admin.ModelAdmin):
-    exclude = ('last_mod_time', 'created_time')
+    exclude = ('last_mod_time', 'creation_time')
 
 
 class SideBarAdmin(admin.ModelAdmin):
     list_display = ('name', 'content', 'is_enable', 'sequence')
-    exclude = ('last_mod_time', 'created_time')
+    exclude = ('last_mod_time', 'creation_time')
 
 
 class BlogSettingsAdmin(admin.ModelAdmin):
-    pass
+    """单例配置Admin - 直接跳转到编辑页面"""
+
+    def has_add_permission(self, request):
+        """如果已经存在配置，则禁止添加"""
+        return not BlogSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        """禁止删除配置"""
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        """列表页直接跳转到编辑页面"""
+        from django.http import HttpResponseRedirect
+        obj = BlogSettings.objects.first()
+        if obj:
+            return HttpResponseRedirect(
+                reverse('admin:blog_blogsettings_change', args=[obj.pk])
+            )
+        # 如果不存在配置，跳转到添加页面
+        return HttpResponseRedirect(
+            reverse('admin:blog_blogsettings_add')
+        )
+
+    def save_model(self, request, obj, form, change):
+        """保存设置时清除缓存"""
+        super().save_model(request, obj, form, change)
+        # 确保缓存被清除
+        from djangoblog.utils import cache
+        cache.clear()
+        self.message_user(request, '设置已保存，缓存已清除')

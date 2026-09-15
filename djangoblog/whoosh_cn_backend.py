@@ -12,8 +12,8 @@ import warnings
 import six
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.utils.datetime_safe import datetime
-from django.utils.encoding import force_text
+from datetime import datetime
+from django.utils.encoding import force_str
 from haystack.backends import BaseEngine, BaseSearchBackend, BaseSearchQuery, EmptyResults, log_query
 from haystack.constants import DJANGO_CT, DJANGO_ID, ID
 from haystack.exceptions import MissingDependency, SearchBackendError, SkipDocument
@@ -376,7 +376,7 @@ class WhooshSearchBackend(BaseSearchBackend):
                 'hits': 0,
             }
 
-        query_string = force_text(query_string)
+        query_string = force_str(query_string)
 
         # A one-character query (non-wildcard) gets nabbed by a stopwords
         # filter and should yield zero results.
@@ -467,7 +467,7 @@ class WhooshSearchBackend(BaseSearchBackend):
 
             for nq in narrow_queries:
                 recent_narrowed_results = narrow_searcher.search(
-                    self.parser.parse(force_text(nq)), limit=None)
+                    self.parser.parse(force_str(nq)), limit=None)
 
                 if len(recent_narrowed_results) <= 0:
                     return {
@@ -614,7 +614,7 @@ class WhooshSearchBackend(BaseSearchBackend):
 
             for nq in narrow_queries:
                 recent_narrowed_results = narrow_searcher.search(
-                    self.parser.parse(force_text(nq)), limit=None)
+                    self.parser.parse(force_str(nq)), limit=None)
 
                 if len(recent_narrowed_results) <= 0:
                     return {
@@ -727,20 +727,69 @@ class WhooshSearchBackend(BaseSearchBackend):
                 del (additional_fields[DJANGO_ID])
 
                 if highlight:
-                    sa = StemmingAnalyzer()
-                    formatter = WhooshHtmlFormatter('em')
-                    terms = [token.text for token in sa(query_string)]
+                    # 使用中文分词器
+                    ca = ChineseAnalyzer()
 
-                    whoosh_result = whoosh_highlight(
-                        additional_fields.get(self.content_field_name),
-                        terms,
-                        sa,
-                        ContextFragmenter(),
-                        formatter
-                    )
-                    additional_fields['highlighted'] = {
-                        self.content_field_name: [whoosh_result],
-                    }
+                    highlighted = {}
+
+                    # 高亮标题（如果存在）
+                    if 'title' in additional_fields and additional_fields['title']:
+                        import re
+                        title_text = additional_fields['title']
+                        # 使用正则表达式高亮，不转义HTML
+                        for term in query_string.split():
+                            if len(term) >= 2:
+                                # 不区分大小写地替换
+                                title_text = re.sub(
+                                    r'(' + re.escape(term) + r')',
+                                    r'<mark>\1</mark>',
+                                    title_text,
+                                    flags=re.IGNORECASE
+                                )
+                        if '<mark>' in title_text:
+                            highlighted['title'] = [title_text]
+
+                    # 高亮正文 - 返回markdown片段，让模板处理
+                    if 'body' in additional_fields and additional_fields['body']:
+                        import re
+                        from djangoblog.utils import CommonMarkdown
+
+                        # 先转换为HTML，便于提取摘要
+                        html_content = CommonMarkdown.get_markdown(additional_fields['body'])
+
+                        # 提取纯文本用于搜索匹配的上下文
+                        from django.utils.html import strip_tags
+                        plain_text = strip_tags(html_content)
+
+                        # 找到关键词的位置，提取上下文
+                        match_pos = -1
+                        for term in query_string.split():
+                            if len(term) >= 2:
+                                pos = plain_text.lower().find(term.lower())
+                                if pos >= 0:
+                                    match_pos = pos
+                                    break
+
+                        if match_pos >= 0:
+                            # 提取匹配位置前后的内容
+                            start = max(0, match_pos - 150)
+                            end = min(len(plain_text), match_pos + 350)
+                            snippet = plain_text[start:end]
+
+                            # 对snippet进行高亮
+                            for term in query_string.split():
+                                if len(term) >= 2:
+                                    snippet = re.sub(
+                                        r'(' + re.escape(term) + r')',
+                                        r'<mark>\1</mark>',
+                                        snippet,
+                                        flags=re.IGNORECASE
+                                    )
+
+                            highlighted['body'] = [snippet]
+
+                    if highlighted:
+                        additional_fields['highlighted'] = highlighted
 
                 result = result_class(
                     app_label,
@@ -771,7 +820,7 @@ class WhooshSearchBackend(BaseSearchBackend):
         spelling_suggestion = None
         reader = self.index.reader()
         corrector = reader.corrector(self.content_field_name)
-        cleaned_query = force_text(query_string)
+        cleaned_query = force_str(query_string)
 
         if not query_string:
             return spelling_suggestion
@@ -811,12 +860,12 @@ class WhooshSearchBackend(BaseSearchBackend):
             else:
                 value = 'false'
         elif isinstance(value, (list, tuple)):
-            value = u','.join([force_text(v) for v in value])
+            value = u','.join([force_str(v) for v in value])
         elif isinstance(value, (six.integer_types, float)):
             # Leave it alone.
             pass
         else:
-            value = force_text(value)
+            value = force_str(value)
         return value
 
     def _to_python(self, value):
@@ -873,9 +922,9 @@ class WhooshSearchBackend(BaseSearchBackend):
 class WhooshSearchQuery(BaseSearchQuery):
     def _convert_datetime(self, date):
         if hasattr(date, 'hour'):
-            return force_text(date.strftime('%Y%m%d%H%M%S'))
+            return force_str(date.strftime('%Y%m%d%H%M%S'))
         else:
-            return force_text(date.strftime('%Y%m%d000000'))
+            return force_str(date.strftime('%Y%m%d000000'))
 
     def clean(self, query_fragment):
         """
